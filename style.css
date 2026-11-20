@@ -1,0 +1,136 @@
+:root {
+  --bg: #e9e9ee;
+  --bar: #f7f7f9;
+  --text: #1c1c1e;
+  --sub: #6e6e73;
+  --line: #d6d6dc;
+  --accent: #0a7aff;
+  --accent-bg: #e3efff;
+  --danger: #e0352b;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  overscroll-behavior: none;
+}
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; touch-action: manipulation; }
+[hidden] { display: none !important; }
+.view { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+/* ---- バー ---- */
+.bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: calc(env(safe-area-inset-top) + 6px) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
+  background: var(--bar); border-bottom: 1px solid var(--line); min-height: 52px; flex: none;
+}
+.bar h1 { font-size: 22px; margin: 0; }
+.spacer { flex: 1; }
+.btn { padding: 8px 12px; border-radius: 10px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+.btn.primary { background: var(--accent); color: #fff; }
+.btn:active, .icon:active { opacity: .6; }
+.title-btn { font-weight: 700; font-size: 17px; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 6px 8px; border-radius: 8px; }
+.icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 10px; }
+.icon svg, .tool svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.icon:disabled { opacity: .3; }
+#edMenu svg circle { fill: currentColor; }
+#pageNo { color: var(--sub); font-size: 14px; margin-right: 4px; font-variant-numeric: tabular-nums; }
+
+/* ---- ツールバー ---- */
+.toolbar {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px 18px;
+  padding: 6px 12px; background: var(--bar); border-bottom: 1px solid var(--line); flex: none;
+}
+.group { display: flex; align-items: center; gap: 4px; }
+.tool { width: 46px; height: 42px; border-radius: 10px; display: grid; place-items: center; }
+.tool.on { background: var(--accent-bg); color: var(--accent); }
+.swatch { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; position: relative; }
+.swatch i { width: 24px; height: 24px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+.swatch.on { box-shadow: inset 0 0 0 2px var(--accent); }
+.swatch input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.swatch.custom i { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+.size { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; }
+.size i { display: block; border-radius: 50%; background: currentColor; }
+.size.on { background: var(--accent-bg); color: var(--accent); }
+
+/* ---- ページ ---- */
+#scroller {
+  flex: 1; overflow: auto; position: relative; -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y; overscroll-behavior: contain;
+}
+#scroller.finger { touch-action: none; }
+#pages {
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
+  padding: 20px 16px 120px; width: max-content; min-width: 100%;
+}
+.page { position: relative; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.18); flex: none; }
+.page canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.page canvas.live.hl { opacity: .4; mix-blend-mode: multiply; }
+.page .pno { position: absolute; bottom: -20px; right: 0; font-size: 11px; color: var(--sub); }
+.sel {
+  position: absolute; border: 1.5px dashed var(--accent); background: rgba(10,122,255,.06);
+  border-radius: 4px; pointer-events: none;
+}
+#selMenu {
+  position: fixed; z-index: 20; display: flex; background: #2c2c2e; border-radius: 10px; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25); transform: translate(-50%, -100%);
+}
+#selMenu button { color: #fff; padding: 10px 16px; font-size: 15px; }
+#selMenu button + button { border-left: 1px solid #48484a; }
+#addPageFab {
+  position: fixed; right: max(20px, env(safe-area-inset-right)); bottom: calc(env(safe-area-inset-bottom) + 20px);
+  width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 30px; line-height: 1;
+  box-shadow: 0 3px 12px rgba(0,0,0,.25);
+}
+
+/* ---- 一覧 ---- */
+#shelf {
+  flex: 1; overflow: auto; padding: 20px max(20px, env(safe-area-inset-right)) 40px max(20px, env(safe-area-inset-left));
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 24px 20px; align-content: start;
+}
+.card { display: flex; flex-direction: column; gap: 6px; text-align: left; position: relative; }
+.card .thumb {
+  aspect-ratio: 1000 / 1414; width: 100%; background: #fff center / cover no-repeat; border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.2); border-left: 8px solid var(--cover, #ff9f0a);
+}
+.card .name { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .meta { font-size: 12px; color: var(--sub); }
+.card .more { position: absolute; top: 6px; right: 6px; width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,.92); box-shadow: 0 1px 3px rgba(0,0,0,.2); font-weight: 700; }
+#emptyMsg, #installTip { text-align: center; color: var(--sub); padding: 0 24px; }
+#installTip { position: fixed; bottom: calc(env(safe-area-inset-bottom) + 16px); left: 0; right: 0; font-size: 14px; }
+
+/* ---- シート ---- */
+#sheetBg { position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 30; }
+#sheet {
+  position: fixed; z-index: 31; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(380px, calc(100vw - 32px)); max-height: 85vh; overflow: auto;
+  background: #fff; border-radius: 16px; padding: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.3);
+}
+#sheet h2 { font-size: 15px; color: var(--sub); text-align: center; margin: 8px 0; font-weight: 600; }
+#sheet .item { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 13px 14px; border-radius: 10px; text-align: left; font-size: 16px; }
+#sheet .item:active { background: #f0f0f4; }
+#sheet .item.danger { color: var(--danger); }
+#sheet .row { display: flex; gap: 6px; padding: 6px 8px; }
+#sheet .row button { flex: 1; padding: 10px 4px; border-radius: 10px; background: #f0f0f4; font-size: 14px; }
+#sheet .row button.on { background: var(--accent); color: #fff; }
+#sheet .label { font-size: 13px; color: var(--sub); padding: 8px 14px 0; }
+#sheet input[type=text] { width: calc(100% - 16px); margin: 8px; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; -webkit-user-select: text; user-select: text; }
+#sheet .actions { display: flex; gap: 8px; padding: 8px; }
+#sheet .actions button { flex: 1; padding: 12px; border-radius: 10px; background: #f0f0f4; font-weight: 600; }
+#sheet .actions button.primary { background: var(--accent); color: #fff; }
+#sheet .actions button.danger { background: var(--danger); color: #fff; }
+#sheet p { margin: 8px 14px; }
+.switch { width: 50px; height: 30px; border-radius: 15px; background: #d1d1d6; position: relative; flex: none; transition: background .2s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 26px; height: 26px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: left .2s; }
+.switch.on { background: #34c759; }
+.switch.on::after { left: 22px; }
+.covers { display: flex; gap: 10px; padding: 6px 14px; flex-wrap: wrap; }
+.covers button { width: 34px; height: 34px; border-radius: 50%; }
+.covers button.on { box-shadow: 0 0 0 3px #fff, 0 0 0 5px var(--accent); }
+
+#toast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 90px); transform: translateX(-50%);
+  background: rgba(30,30,32,.92); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 14px; z-index: 40;
+}

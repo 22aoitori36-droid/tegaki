@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#f7f7f9">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="ノート">
+<title>手書きノート</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ===== ノート一覧 ===== -->
+<section id="library" class="view">
+  <header class="bar">
+    <h1>ノート</h1>
+    <span class="spacer"></span>
+    <button class="btn" id="libMenu" aria-label="その他">…</button>
+    <button class="btn primary" id="newNb">＋ 新しいノート</button>
+  </header>
+  <main id="shelf"></main>
+  <p id="emptyMsg" hidden>まだノートがありません。「＋ 新しいノート」から作成できます。</p>
+  <p id="installTip" hidden>Safari の共有ボタン →「ホーム画面に追加」でアプリとして使えます（データも消えにくくなります）。</p>
+</section>
+
+<!-- ===== エディタ ===== -->
+<section id="editor" class="view" hidden>
+  <header class="bar">
+    <button class="btn" id="back">‹ ノート</button>
+    <button class="title-btn" id="nbTitle"></button>
+    <span class="spacer"></span>
+    <span id="pageNo"></span>
+    <button class="icon" id="undo" aria-label="取り消す"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+    <button class="icon" id="redo" aria-label="やり直す"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+    <button class="icon" id="edMenu" aria-label="メニュー"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>
+  </header>
+  <div class="toolbar">
+    <div class="group" id="tools">
+      <button class="tool" data-tool="pen" aria-label="ペン"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
+      <button class="tool" data-tool="hl" aria-label="蛍光ペン"><svg viewBox="0 0 24 24"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg></button>
+      <button class="tool" data-tool="eraser" aria-label="消しゴム"><svg viewBox="0 0 24 24"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg></button>
+      <button class="tool" data-tool="lasso" aria-label="なげなわ（選択して移動）"><svg viewBox="0 0 24 24"><path d="M7 22a5 5 0 0 1-2-4"/><path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"/><circle cx="5" cy="16" r="2"/></svg></button>
+    </div>
+    <div class="group" id="colors"></div>
+    <div class="group" id="sizes"></div>
+  </div>
+  <div id="scroller"><div id="pages"></div></div>
+  <div id="selMenu" hidden>
+    <button data-act="copy">複製</button>
+    <button data-act="delete">削除</button>
+  </div>
+  <button id="addPageFab" aria-label="ページを追加">＋</button>
+</section>
+
+<!-- 汎用シート（メニュー・確認） -->
+<div id="sheetBg" hidden></div>
+<div id="sheet" hidden></div>
+<div id="toast" hidden></div>
+<input type="file" id="importFile" accept="application/json,.json" hidden>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
