@@ -1,13 +1,14 @@
 // IndexedDB: notebooks（ノート）と pages（ページ）を保存する
-const DB_NAME = 'tegaki', VER = 1;
+const DB_NAME = 'tegaki', VER = 2;
 let dbp;
 function open() {
   if (!dbp) dbp = new Promise((res, rej) => {
     const r = indexedDB.open(DB_NAME, VER);
     r.onupgradeneeded = () => {
       const d = r.result;
-      d.createObjectStore('notebooks', { keyPath: 'id' });
-      d.createObjectStore('pages', { keyPath: 'id' }).createIndex('nb', 'notebookId');
+      if (!d.objectStoreNames.contains('notebooks')) d.createObjectStore('notebooks', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('pages')) d.createObjectStore('pages', { keyPath: 'id' }).createIndex('nb', 'notebookId');
+      if (!d.objectStoreNames.contains('folders')) d.createObjectStore('folders', { keyPath: 'id' }); // v2: 分野フォルダ
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -51,12 +52,21 @@ export const db = {
     for (const id of nb.pageIds) s.delete(id);
     t.objectStore('notebooks').delete(nb.id);
   }),
-  exportAll: () => tx(['pages', 'notebooks'], 'readonly', async (t) => ({
-    app: 'tegaki', version: 1, exportedAt: new Date().toISOString(),
+  folders: () => tx(['folders'], 'readonly', (t) => req(t.objectStore('folders').getAll())),
+  putFolder: (f) => tx(['folders'], 'readwrite', (t) => { t.objectStore('folders').put(f); }),
+  // フォルダを消し、中のノートは未分類にする
+  deleteFolder: (f, notebooks) => tx(['folders', 'notebooks'], 'readwrite', (t) => {
+    t.objectStore('folders').delete(f.id);
+    for (const nb of notebooks) t.objectStore('notebooks').put({ ...nb, folderId: null });
+  }),
+  exportAll: () => tx(['pages', 'notebooks', 'folders'], 'readonly', async (t) => ({
+    app: 'tegaki', version: 2, exportedAt: new Date().toISOString(),
+    folders: await req(t.objectStore('folders').getAll()),
     notebooks: await req(t.objectStore('notebooks').getAll()),
     pages: await req(t.objectStore('pages').getAll()),
   })),
-  importAll: (data) => tx(['pages', 'notebooks'], 'readwrite', (t) => {
+  importAll: (data) => tx(['pages', 'notebooks', 'folders'], 'readwrite', (t) => {
+    for (const f of data.folders || []) t.objectStore('folders').put(f);
     for (const nb of data.notebooks) t.objectStore('notebooks').put(nb);
     for (const p of data.pages) t.objectStore('pages').put(p);
   }),

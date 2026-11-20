@@ -85,6 +85,28 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
   box-shadow: 0 3px 12px rgba(0,0,0,.25);
 }
 
+/* ---- フォルダ ---- */
+#folders {
+  display: flex; gap: 8px; overflow-x: auto; flex: none; scrollbar-width: none;
+  padding: 10px max(16px, env(safe-area-inset-right)) 4px max(16px, env(safe-area-inset-left));
+}
+#folders::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 18px;
+  background: #fff; border: 1px solid var(--line); font-size: 15px; white-space: nowrap;
+}
+.chip .dot { width: 10px; height: 10px; border-radius: 50%; }
+.chip .n { color: var(--sub); font-size: 12px; }
+.chip.on { background: var(--text); color: #fff; border-color: var(--text); }
+.chip.on .n { color: #c7c7cc; }
+.chip.on .gear { margin-left: 2px; font-size: 13px; opacity: .8; }
+.chip.add { color: var(--accent); border-style: dashed; }
+.shelf-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-bottom: -8px; }
+.shelf-head h2 { margin: 0; font-size: 20px; }
+.shelf-head .btn { margin-left: auto; }
+#sheet .wrap { flex-wrap: wrap; }
+#sheet .wrap button { flex: 0 0 auto; padding: 8px 12px; }
+
 /* ---- 一覧 ---- */
 #shelf {
   flex: 1; overflow: auto; padding: 20px max(20px, env(safe-area-inset-right)) 40px max(20px, env(safe-area-inset-left));

@@ -40,6 +40,7 @@ const settings = {
   hl: { color: '#ffe14d', size: 1 },
   eraser: { size: 1 },
   finger: false, // 指で書く（オフなら指はスクロール、ペンだけが書ける）
+  folder: 'all', // 一覧で選んでいるフォルダ（'all' | 'none' | フォルダID）
 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('tegaki-settings') || '{}')); } catch { /* 既定値 */ }
 const saveSettings = () => { try { localStorage.setItem('tegaki-settings', JSON.stringify(settings)); } catch { /* 無視 */ } };
@@ -248,13 +249,60 @@ async function showLibrary() {
   await renderShelf();
 }
 
+let folders = [];
+const folderOf = (nb) => folders.find((f) => f.id === nb.folderId) || null;
+
 async function renderShelf() {
-  const list = (await db.notebooks()).sort((a, b) => b.updated - a.updated);
+  const [all, fl] = await Promise.all([db.notebooks(), db.folders()]);
+  folders = fl.sort((a, b) => a.created - b.created);
+  const unfiled = all.filter((nb) => !folderOf(nb));
+  let cur = settings.folder;
+  if ((cur !== 'all' && cur !== 'none' && !folders.some((f) => f.id === cur)) || (cur === 'none' && !unfiled.length)) {
+    cur = settings.folder = 'all';
+    saveSettings();
+  }
+  const curFolder = folders.find((f) => f.id === cur) || null;
+
+  // フォルダのタブ。選択中のフォルダをもう一度押すとメニュー
+  const bar = $('#folders');
+  bar.innerHTML = '';
+  const chip = (key, label, count, color) => {
+    const on = key === cur;
+    const folder = folders.find((f) => f.id === key);
+    bar.append(h('button', {
+      class: `chip${on ? ' on' : ''}`,
+      onclick: () => {
+        if (on && folder) { folderMenu(folder); return; }
+        settings.folder = key; saveSettings(); renderShelf();
+      },
+    },
+    color ? h('span', { class: 'dot', style: `background:${color}` }) : null,
+    h('span', { text: label }),
+    h('span', { class: 'n', text: String(count) }),
+    on && folder ? h('span', { class: 'gear', text: '⋯' }) : null));
+  };
+  chip('all', 'すべて', all.length);
+  for (const f of folders) chip(f.id, f.name, all.filter((nb) => nb.folderId === f.id).length, f.color);
+  if (folders.length && unfiled.length) chip('none', '未分類', unfiled.length);
+  bar.append(h('button', { class: 'chip add', text: '＋ フォルダ', onclick: newFolder }));
+
+  const list = (cur === 'all' ? all : cur === 'none' ? unfiled : all.filter((nb) => nb.folderId === cur))
+    .sort((a, b) => b.updated - a.updated);
   const shelf = $('#shelf');
   shelf.innerHTML = '';
-  $('#emptyMsg').hidden = list.length > 0;
+  if (curFolder) {
+    shelf.append(h('div', { class: 'shelf-head' },
+      h('span', { class: 'dot', style: `width:14px;height:14px;border-radius:50%;background:${curFolder.color}` }),
+      h('h2', { text: curFolder.name }),
+      list.length ? h('button', { class: 'btn', text: 'まとめてPDF', onclick: () => exportFolderPdf(curFolder) }) : null));
+  }
+  const msg = $('#emptyMsg');
+  msg.hidden = list.length > 0;
+  msg.textContent = all.length ? 'このフォルダにはまだノートがありません。「＋ 新しいノート」で作ると、このフォルダに入ります。'
+    : 'まだノートがありません。「＋ 新しいノート」から作成できます。分野ごとに分けたいときは「＋ フォルダ」でフォルダを作れます。';
   for (const nb of list) {
     const d = new Date(nb.updated);
+    const f = cur === 'all' ? folderOf(nb) : null;
     const card = h('div', { class: 'card' },
       h('button', {
         class: 'thumb', 'aria-label': nb.title,
@@ -262,16 +310,24 @@ async function renderShelf() {
         onclick: () => openNotebook(nb.id),
       }),
       h('div', { class: 'name', text: nb.title }),
-      h('div', { class: 'meta', text: `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}・${nb.pageIds.length}ページ` }),
+      h('div', { class: 'meta', text: `${f ? `${f.name}・` : ''}${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}・${nb.pageIds.length}ページ` }),
       h('button', { class: 'more', text: '…', 'aria-label': 'ノートのメニュー', onclick: () => notebookMenu(nb) }),
     );
     shelf.append(card);
   }
 }
 
-function notebookForm({ title, cover, paper, submit, onSubmit }) {
+function notebookForm({ title, cover, paper, folderId = null, submit, onSubmit }) {
   openSheet((el, close) => {
-    let c = cover, pp = paper;
+    let c = cover, pp = paper, fid = folderId;
+    const folderRow = h('div', { class: 'row wrap' });
+    const drawFolders = () => {
+      folderRow.innerHTML = '';
+      for (const f of [{ id: null, name: '未分類' }, ...folders]) {
+        folderRow.append(h('button', { class: f.id === fid ? 'on' : '', text: f.name, onclick: () => { fid = f.id; drawFolders(); } }));
+      }
+    };
+    drawFolders();
     const input = h('input', { type: 'text', value: title, placeholder: 'ノートの名前' });
     const covers = h('div', { class: 'covers' });
     const drawCovers = () => {
@@ -292,9 +348,10 @@ function notebookForm({ title, cover, paper, submit, onSubmit }) {
       input,
       h('div', { class: 'label', text: '表紙の色' }), covers,
       paper != null ? h('div', { class: 'label', text: '用紙' }) : null, paper != null ? papers : null,
+      folders.length ? h('div', { class: 'label', text: 'フォルダ（分野）' }) : null, folders.length ? folderRow : null,
       h('div', { class: 'actions' },
         h('button', { text: 'キャンセル', onclick: close }),
-        h('button', { class: 'primary', text: submit, onclick: () => { close(); onSubmit({ title: input.value.trim() || '無題のノート', cover: c, paper: pp }); } })),
+        h('button', { class: 'primary', text: submit, onclick: () => { close(); onSubmit({ title: input.value.trim() || '無題のノート', cover: c, paper: pp, folderId: fid }); } })),
     );
   });
 }
@@ -305,11 +362,12 @@ function newNotebook() {
     title: `ノート ${d.getMonth() + 1}/${d.getDate()}`,
     cover: COVERS[Math.floor(Math.random() * 6)],
     paper: 'ruled',
+    folderId: folders.some((f) => f.id === settings.folder) ? settings.folder : null,
     submit: '作成',
-    onSubmit: async ({ title, cover, paper }) => {
+    onSubmit: async ({ title, cover, paper, folderId }) => {
       const now = Date.now();
       const page = { id: uid(), notebookId: null, paper, strokes: [] };
-      const nb = { id: uid(), title, cover, paper, created: now, updated: now, pageIds: [page.id], thumb: null };
+      const nb = { id: uid(), title, cover, paper, folderId, created: now, updated: now, pageIds: [page.id], thumb: null };
       page.notebookId = nb.id;
       await db.putPages([page], nb);
       openNotebook(nb.id);
@@ -322,11 +380,11 @@ function notebookMenu(nb) {
     el.append(
       h('h2', { text: nb.title }),
       h('button', {
-        class: 'item', text: '名前と表紙を変更', onclick: () => {
+        class: 'item', text: folders.length ? '名前・表紙・フォルダを変更' : '名前と表紙を変更', onclick: () => {
           close();
           notebookForm({
-            title: nb.title, cover: nb.cover, submit: '保存',
-            onSubmit: async ({ title, cover }) => { Object.assign(nb, { title, cover }); await db.putNotebook(nb); renderShelf(); },
+            title: nb.title, cover: nb.cover, folderId: folderOf(nb) ? nb.folderId : null, submit: '保存',
+            onSubmit: async ({ title, cover, folderId }) => { Object.assign(nb, { title, cover, folderId }); await db.putNotebook(nb); renderShelf(); },
           });
         },
       }),
@@ -337,6 +395,67 @@ function notebookMenu(nb) {
           if (await confirmDialog(`「${nb.title}」を削除しますか？\nこの操作は元に戻せません。`, '削除', true)) {
             await db.deleteNotebook(nb); renderShelf(); toast('削除しました');
           }
+        },
+      }),
+    );
+  });
+}
+
+// ---------------------------------------------------------------- フォルダ（分野）
+function folderForm({ name, color, submit, onSubmit }) {
+  openSheet((el, close) => {
+    let c = color;
+    const input = h('input', { type: 'text', value: name, placeholder: '例：数学、物理、英語' });
+    const covers = h('div', { class: 'covers' });
+    const drawCovers = () => {
+      covers.innerHTML = '';
+      for (const col of COVERS) covers.append(h('button', { class: col === c ? 'on' : '', style: `background:${col}`, 'aria-label': '色', onclick: () => { c = col; drawCovers(); } }));
+    };
+    drawCovers();
+    el.append(
+      h('h2', { text: submit === '作成' ? '新しいフォルダ' : 'フォルダの設定' }),
+      input,
+      h('div', { class: 'label', text: '色' }), covers,
+      h('div', { class: 'actions' },
+        h('button', { text: 'キャンセル', onclick: close }),
+        h('button', { class: 'primary', text: submit, onclick: () => { const v = input.value.trim(); if (!v) { input.focus(); return; } close(); onSubmit({ name: v, color: c }); } })),
+    );
+  });
+}
+
+function newFolder() {
+  folderForm({
+    name: '', color: COVERS[folders.length % COVERS.length], submit: '作成',
+    onSubmit: async ({ name, color }) => {
+      const f = { id: uid(), name, color, created: Date.now() };
+      await db.putFolder(f);
+      settings.folder = f.id; saveSettings();
+      renderShelf();
+      toast(`フォルダ「${name}」を作りました`);
+    },
+  });
+}
+
+function folderMenu(f) {
+  openSheet((el, close) => {
+    el.append(
+      h('h2', { text: f.name }),
+      h('button', {
+        class: 'item', text: '名前と色を変更', onclick: () => {
+          close();
+          folderForm({ name: f.name, color: f.color, submit: '保存', onSubmit: async ({ name, color }) => { Object.assign(f, { name, color }); await db.putFolder(f); renderShelf(); } });
+        },
+      }),
+      h('button', { class: 'item', text: 'このフォルダのノートをまとめてPDFにする', onclick: () => { close(); exportFolderPdf(f); } }),
+      h('button', {
+        class: 'item danger', text: 'フォルダを削除', onclick: async () => {
+          close();
+          if (!(await confirmDialog(`フォルダ「${f.name}」を削除しますか？\n中のノートは消えずに「未分類」へ移ります。`, '削除', true))) return;
+          const inside = (await db.notebooks()).filter((nb) => nb.folderId === f.id);
+          await db.deleteFolder(f, inside);
+          settings.folder = 'all'; saveSettings();
+          renderShelf();
+          toast('フォルダを削除しました');
         },
       }),
     );
@@ -1024,24 +1143,44 @@ function editorMenu() {
 }
 
 // ---------------------------------------------------------------- 書き出し
+async function notebookPages(nb) {
+  if (ed.nb && ed.nb.id === nb.id) { await flush(); return ed.pages; }
+  return db.pages(nb);
+}
+async function writePdf(pages, name) {
+  const W = 1654, H = Math.round(W * PH / PW); // A4 200dpi
+  const c = h('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  const images = [];
+  for (const [i, page] of pages.entries()) {
+    if (pages.length > 3) toast(`PDFを作成中… ${i + 1} / ${pages.length}`, 60000);
+    renderPageTo(ctx, page, W / PW);
+    const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
+    images.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), w: W, h: H });
+  }
+  c.width = c.height = 0;
+  $('#toast').hidden = true;
+  offerFile(makePdf(images), name);
+}
 async function exportPdf(nb) {
   toast('PDFを作成中…', 60000);
   try {
-    if (ed.nb && ed.nb.id === nb.id) await flush();
-    const pages = ed.nb && ed.nb.id === nb.id ? ed.pages : await db.pages(nb);
-    const W = 1654, H = Math.round(W * PH / PW); // A4 200dpi
-    const c = h('canvas');
-    c.width = W; c.height = H;
-    const ctx = c.getContext('2d');
-    const images = [];
-    for (const page of pages) {
-      renderPageTo(ctx, page, W / PW);
-      const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
-      images.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), w: W, h: H });
-    }
-    c.width = c.height = 0;
-    $('#toast').hidden = true;
-    offerFile(makePdf(images), `${safeName(nb.title)}.pdf`);
+    await writePdf(await notebookPages(nb), `${safeName(nb.title)}.pdf`);
+  } catch (err) {
+    toast(`PDFを作れませんでした：${err.message}`, 4000);
+  }
+}
+// フォルダ内のノートを名前順に1つのPDFへまとめる
+async function exportFolderPdf(f) {
+  const nbs = (await db.notebooks()).filter((nb) => nb.folderId === f.id)
+    .sort((a, b) => a.title.localeCompare(b.title, 'ja', { numeric: true }));
+  if (!nbs.length) { toast('このフォルダにはノートがありません'); return; }
+  toast('PDFを作成中…', 60000);
+  try {
+    const pages = [];
+    for (const nb of nbs) pages.push(...(await notebookPages(nb)));
+    await writePdf(pages, `${safeName(f.name)}.pdf`);
   } catch (err) {
     toast(`PDFを作れませんでした：${err.message}`, 4000);
   }
@@ -1059,6 +1198,13 @@ async function exportPng() {
 // ---------------------------------------------------------------- ボタン類
 $('#back').onclick = showLibrary;
 $('#edMenu').onclick = editorMenu;
+$('#edExport').onclick = () => openSheet((el, close) => {
+  el.append(
+    h('h2', { text: '書き出し' }),
+    h('button', { class: 'item', text: 'ノート全体をPDFで書き出す', onclick: () => { close(); exportPdf(ed.nb); } }),
+    h('button', { class: 'item', text: `このページ（${ed.cur + 1}ページ目）を画像で保存`, onclick: () => { close(); exportPng(); } }),
+  );
+});
 $('#addPageFab').onclick = addPage;
 $('#newNb').onclick = newNotebook;
 $('#libMenu').onclick = libraryMenu;
@@ -1066,9 +1212,9 @@ $('#importFile').onchange = (e) => { const f = e.target.files[0]; e.target.value
 $('#nbTitle').onclick = () => {
   const nb = ed.nb;
   notebookForm({
-    title: nb.title, cover: nb.cover, submit: '保存',
-    onSubmit: async ({ title, cover }) => {
-      Object.assign(nb, { title, cover });
+    title: nb.title, cover: nb.cover, folderId: folderOf(nb) ? nb.folderId : null, submit: '保存',
+    onSubmit: async ({ title, cover, folderId }) => {
+      Object.assign(nb, { title, cover, folderId });
       $('#nbTitle').textContent = title;
       await db.putNotebook(nb);
     },
