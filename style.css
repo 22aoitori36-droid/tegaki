@@ -13,8 +13,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 body {
   background: var(--bg); color: var(--text);
   font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
-  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   overscroll-behavior: none;
+}
+/* 選択・長押しメニューを止めるのは描画面とボタン類だけ（入力欄に継承させると iPad で文字が打てなくなる） */
+.bar, .toolbar, #scroller, #shelf, #folders, button, label, #selMenu, #sheet h2, #sheet .label, #sheet p {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; touch-action: manipulation; }
 [hidden] { display: none !important; }
@@ -138,7 +141,7 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 #sheet .row button { flex: 1; padding: 10px 4px; border-radius: 10px; background: #f0f0f4; font-size: 14px; }
 #sheet .row button.on { background: var(--accent); color: #fff; }
 #sheet .label { font-size: 13px; color: var(--sub); padding: 8px 14px 0; }
-#sheet input[type=text] { width: calc(100% - 16px); margin: 8px; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; -webkit-user-select: text; user-select: text; }
+#sheet input[type=text] { width: calc(100% - 16px); margin: 8px; font: inherit; font-size: 17px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 #sheet .actions { display: flex; gap: 8px; padding: 8px; }
 #sheet .actions button { flex: 1; padding: 12px; border-radius: 10px; background: #f0f0f4; font-weight: 600; }
 #sheet .actions button.primary { background: var(--accent); color: #fff; }

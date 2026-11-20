@@ -317,7 +317,7 @@ async function renderShelf() {
   }
 }
 
-function notebookForm({ title, cover, paper, folderId = null, submit, onSubmit }) {
+function notebookForm({ title, placeholder, cover, paper, folderId = null, submit, onSubmit }) {
   openSheet((el, close) => {
     let c = cover, pp = paper, fid = folderId;
     const folderRow = h('div', { class: 'row wrap' });
@@ -328,7 +328,7 @@ function notebookForm({ title, cover, paper, folderId = null, submit, onSubmit }
       }
     };
     drawFolders();
-    const input = h('input', { type: 'text', value: title, placeholder: 'ノートの名前' });
+    const input = h('input', { type: 'text', value: title, placeholder: placeholder || 'ノートの名前', enterkeyhint: 'done', autocomplete: 'off' });
     const covers = h('div', { class: 'covers' });
     const drawCovers = () => {
       covers.innerHTML = '';
@@ -351,15 +351,18 @@ function notebookForm({ title, cover, paper, folderId = null, submit, onSubmit }
       folders.length ? h('div', { class: 'label', text: 'フォルダ（分野）' }) : null, folders.length ? folderRow : null,
       h('div', { class: 'actions' },
         h('button', { text: 'キャンセル', onclick: close }),
-        h('button', { class: 'primary', text: submit, onclick: () => { close(); onSubmit({ title: input.value.trim() || '無題のノート', cover: c, paper: pp, folderId: fid }); } })),
+        h('button', { class: 'primary', text: submit, onclick: () => { close(); onSubmit({ title: input.value.trim() || placeholder || '無題のノート', cover: c, paper: pp, folderId: fid }); } })),
     );
+    // 新規作成は空欄にカーソルを置いてすぐ書けるようにする（押した操作の中で focus するとキーボードが出る）
+    if (!title) input.focus();
   });
 }
 
 function newNotebook() {
   const d = new Date();
   notebookForm({
-    title: `ノート ${d.getMonth() + 1}/${d.getDate()}`,
+    title: '',
+    placeholder: `ノート ${d.getMonth() + 1}/${d.getDate()}`,
     cover: COVERS[Math.floor(Math.random() * 6)],
     paper: 'ruled',
     folderId: folders.some((f) => f.id === settings.folder) ? settings.folder : null,
