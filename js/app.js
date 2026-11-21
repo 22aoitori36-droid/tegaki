@@ -41,6 +41,7 @@ const settings = {
   eraser: { size: 1 },
   finger: false, // 指で書く（オフなら指はスクロール、ペンだけが書ける）
   smooth: 2,     // 手ぶれ補正 0:オフ 1:弱 2:中 3:強
+  zoomLock: false, // ズームを固定（2本指はスクロールだけ）
   folder: 'all', // 一覧で選んでいるフォルダ（'all' | 'none' | フォルダID）
 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('tegaki-settings') || '{}')); } catch { /* 既定値 */ }
@@ -1067,7 +1068,7 @@ function startPinch(f) {
 function movePinch(f) {
   const g = pinchGeom(f);
   pinch.moved = Math.max(pinch.moved, Math.hypot(g.x - pinch.x0, g.y - pinch.y0), Math.abs(g.d - pinch.d0));
-  const z = Math.min(4, Math.max(0.5, pinch.z0 * (g.d / pinch.d0)));
+  const z = settings.zoomLock ? pinch.z0 : Math.min(4, Math.max(0.5, pinch.z0 * (g.d / pinch.d0)));
   if (Math.abs(z - ed.zoom) > 0.002) { ed.zoom = z; layout(); }
   scroller.scrollLeft = pinch.cx * ed.zoom - (g.x - pinch.r.left);
   scroller.scrollTop = pinch.cy * ed.zoom - (g.y - pinch.r.top);
@@ -1079,7 +1080,10 @@ function endPinch() {
   if (Math.abs(ed.zoom - 1) < 0.06) { ed.zoom = 1; layout(); }
   updateTiles(); // 新しい倍率の解像度で描き直す
 }
+// Safari 自体の拡大（ピンチ・ダブルタップ）を止める。ペンや消しゴムを素早く押し替えたときに画面が拡大されないように
 document.addEventListener('gesturestart', (e) => e.preventDefault());
+document.addEventListener('gesturechange', (e) => e.preventDefault());
+document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
 
 // ---------------------------------------------------------------- 選択
 function setSel(entry, strokes) {
@@ -1285,6 +1289,7 @@ function editorMenu() {
       paperRow.append(h('button', { class: cur.paper === k ? 'on' : '', text: v, onclick: () => { setPaper(k, false); close(); } }));
     }
     const sw = h('span', { class: `switch${settings.finger ? ' on' : ''}` });
+    const zsw = h('span', { class: `switch${settings.zoomLock ? ' on' : ''}` });
     const smoothRow = h('div', { class: 'row' });
     const drawSmooth = () => {
       smoothRow.innerHTML = '';
@@ -1307,6 +1312,13 @@ function editorMenu() {
           toast(settings.finger ? '指でも書けます（2本指でスクロール）' : 'ペンだけで書けます（指でスクロール）', 2500);
         },
       }, h('span', { text: '指で書く' }), sw),
+      h('button', {
+        class: 'item', onclick: () => {
+          settings.zoomLock = !settings.zoomLock; saveSettings();
+          zsw.classList.toggle('on', settings.zoomLock);
+          toast(settings.zoomLock ? 'ズームを固定しました（2本指はスクロールだけ）' : '2本指で拡大・縮小できます', 2500);
+        },
+      }, h('span', { text: 'ズームを固定' }), zsw),
       h('div', { class: 'label', text: '手ぶれ補正（線のなめらかさ）' }), smoothRow,
       h('button', { class: 'item', text: 'ズームをリセット', onclick: () => { close(); ed.zoom = 1; layout(); updateTiles(); } }),
       h('button', { class: 'item', text: 'PDFで書き出す', onclick: () => { close(); exportPdf(ed.nb); } }),

@@ -10,6 +10,10 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; overflow: hidden; }
+/* Safari 自体の拡大を止める（iPad は user-scalable=no を無視するため）。縦横のスクロールだけ許可 */
+html, body { touch-action: manipulation; touch-action: pan-x pan-y; }
+/* ツールバー類はタップ以外のジェスチャを一切受けない（ペン↔消しゴムの素早い押し替えで拡大されない） */
+.bar, .toolbar, #selMenu, #addPageFab, #sheetBg, .bar *, .toolbar * { touch-action: none; }
 body {
   background: var(--bg); color: var(--text);
   font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
