@@ -1,6 +1,6 @@
 // オフライン対応: アプリ本体をキャッシュし、裏で更新を確認する（stale-while-revalidate）
 // アプリを更新したら VERSION を上げる
-const VERSION = 'tegaki-v9';
+const VERSION = 'tegaki-v10';
 const FILES = [
   './', './index.html', './style.css', './manifest.json',
   './js/app.js', './js/db.js', './js/pdf.js',

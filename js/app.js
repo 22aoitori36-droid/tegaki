@@ -720,8 +720,13 @@ function renderToolbar() {
     input.oninput = () => { settings[t].color = input.value; saveSettings(); };
     input.onchange = () => renderToolbar();
     colors.append(h('label', { class: `swatch custom${custom ? ' on' : ''}` }, h('i', { style: custom ? `background:${cur}` : null }), input));
+  } else {
+    // 色が無い道具でも同じ幅の空きを残す（ツールバーの高さや配置が変わるとページがずれるため）
+    for (let i = 0; i <= PALETTE.pen.length; i++) colors.append(h('span', { class: 'swatch ghost', 'aria-hidden': 'true' }));
   }
-  if (t !== 'lasso') {
+  if (t === 'lasso') {
+    for (let i = 0; i < SIZE_DOTS.length; i++) sizes.append(h('span', { class: 'size ghost', 'aria-hidden': 'true' }));
+  } else {
     SIZE_DOTS.forEach((d, i) => {
       const on = settings[t].size === i;
       sizes.append(h('button', {

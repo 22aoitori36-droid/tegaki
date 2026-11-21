@@ -61,6 +61,7 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 .size { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; }
 .size i { display: block; border-radius: 50%; background: currentColor; }
 .size.on { background: var(--accent-bg); color: var(--accent); }
+.ghost { visibility: hidden; pointer-events: none; }
 
 /* ---- ページ ---- */
 #scroller {
