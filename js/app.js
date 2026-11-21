@@ -550,7 +550,6 @@ let sel = null;   // なげなわ選択 { entry, strokes, box, div }
 let pinch = null; // 2本指ジェスチャ
 let fingers = 0;  // 画面に触れている指の数（ペンを除く）
 let lastPen = 0;  // 最後にペンが動いた時刻（手のひら対策）
-let unlockT = 0;
 
 const scroller = $('#scroller');
 const pagesEl = $('#pages');
@@ -786,9 +785,6 @@ function drawLive() {
   ctx.restore();
 }
 
-// ペンで書いている間とその直後は、手のひらでスクロール・ズームしないように固定する
-function lockScroll() { clearTimeout(unlockT); scroller.classList.add('lock'); }
-function unlockSoon() { clearTimeout(unlockT); unlockT = setTimeout(() => scroller.classList.remove('lock'), 500); }
 
 // ---------------------------------------------------------------- 入力（ペン・指）
 function point(e) {
@@ -813,7 +809,6 @@ pagesEl.addEventListener('pointerdown', (e) => {
   const entry = ed.map.get(div.dataset.id);
   e.preventDefault();
   act = { id: e.pointerId, ptype: e.pointerType, entry, rect: div.getBoundingClientRect(), tool: settings.tool };
-  if (e.pointerType === 'pen' || e.pointerType === 'touch') lockScroll();
   const pt = point(e);
   const t = act.tool;
   if (t === 'pen' || t === 'hl') {
@@ -911,7 +906,6 @@ function moveAct(pt) {
 function endAct() {
   const a = act;
   act = null;
-  if (a.ptype === 'pen' || a.ptype === 'touch') unlockSoon();
   const e = a.entry;
   if (a.tool === 'pen' || a.tool === 'hl') {
     if (a.stroke.p.length) {
@@ -948,7 +942,6 @@ function cancelAct() {
   if (!act) return;
   const a = act;
   act = null;
-  unlockSoon();
   liveClear();
   if (a.tool === 'eraser' && a.removed.length) { // 消した線を戻す
     for (let i = a.removed.length - 1; i >= 0; i--) a.entry.page.strokes.splice(a.removed[i].index, 0, a.removed[i].stroke);
