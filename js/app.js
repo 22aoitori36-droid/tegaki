@@ -40,6 +40,7 @@ const settings = {
   hl: { color: '#ffe14d', size: 1 },
   eraser: { size: 1 },
   finger: false, // 指で書く（オフなら指はスクロール、ペンだけが書ける）
+  smooth: 2,     // 手ぶれ補正 0:オフ 1:弱 2:中 3:強
   folder: 'all', // 一覧で選んでいるフォルダ（'all' | 'none' | フォルダID）
 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('tegaki-settings') || '{}')); } catch { /* 既定値 */ }
@@ -787,11 +788,33 @@ function drawLive() {
 
 
 // ---------------------------------------------------------------- 入力（ペン・指）
+// 手ぶれ補正（1€フィルタ）：ゆっくり動くときは強くならし、速く書くときは遅れが出ないよう弱める
+const SMOOTH = [null, { min: 6, beta: 0.01 }, { min: 3, beta: 0.005 }, { min: 1.2, beta: 0.003 }];
+const SMOOTH_NAMES = ['オフ', '弱', '中', '強'];
+function makeFilter(level) {
+  const cfg = SMOOTH[level];
+  if (!cfg) return null;
+  let fx, fy, vx = 0, vy = 0, last = null;
+  const alpha = (cut, dt) => 1 / (1 + 1 / (2 * Math.PI * cut * dt));
+  return (x, y, t) => {
+    if (last === null) { fx = x; fy = y; last = t; return [x, y]; }
+    const dt = Math.max(4, t - last) / 1000; // 時刻が詰まった点で効きすぎないように
+    last = t;
+    const ad = alpha(1, dt);
+    vx += ad * ((x - fx) / dt - vx);
+    vy += ad * ((y - fy) / dt - vy);
+    const a = alpha(cfg.min + cfg.beta * Math.hypot(vx, vy), dt);
+    fx += a * (x - fx);
+    fy += a * (y - fy);
+    return [fx, fy];
+  };
+}
+
 function point(e) {
   const r = act.rect;
   let pr = 0.5;
   if (e.pointerType === 'pen') pr = Math.max(0.05, Math.min(1, e.pressure || 0.05));
-  return { x: ((e.clientX - r.left) / r.width) * PW, y: ((e.clientY - r.top) / r.height) * PH, p: pr };
+  return { x: ((e.clientX - r.left) / r.width) * PW, y: ((e.clientY - r.top) / r.height) * PH, p: pr, t: e.timeStamp };
 }
 
 pagesEl.addEventListener('pointerdown', (e) => {
@@ -814,6 +837,7 @@ pagesEl.addEventListener('pointerdown', (e) => {
   if (t === 'pen' || t === 'hl') {
     if (sel) clearSel();
     act.stroke = { t, c: settings[t].color, w: SIZES[t][settings[t].size], p: [] };
+    act.filter = makeFilter(settings.smooth);
     liveStart(t === 'hl' ? 'hl' : '');
     addPoint(pt);
   } else if (t === 'eraser') {
@@ -842,7 +866,8 @@ window.addEventListener('pointermove', (e) => {
   act.rect = act.entry.div.getBoundingClientRect(); // ページが動いていても正しい位置に書く
   const list = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
   for (const ev of list.length ? list : [e]) moveAct(point(ev));
-  requestLive();
+  cancelAnimationFrame(live.raf); live.raf = 0;
+  drawLive(); // 入力と同じフレームで描く（1フレーム分の遅れをなくす）
 });
 window.addEventListener('pointerup', (e) => { if (act && e.pointerId === act.id) endAct(); });
 window.addEventListener('pointercancel', (e) => {
@@ -850,16 +875,18 @@ window.addEventListener('pointercancel', (e) => {
   if (act.ptype === 'touch') cancelAct(); else endAct();
 });
 
-function addPoint(pt) {
+function addPoint(pt, raw = false) {
   const p = act.stroke.p;
-  let pr = pt.p;
+  let x = pt.x, y = pt.y, pr = pt.p;
+  act.tip = pt;
+  if (act.filter && !raw) [x, y] = act.filter(pt.x, pt.y, pt.t);
   if (p.length) {
-    const dx = pt.x - p[p.length - 3], dy = pt.y - p[p.length - 2];
+    const dx = x - p[p.length - 3], dy = y - p[p.length - 2];
     const min = 0.8 / ((act.rect.width * dpr()) / PW); // 画面上で約 0.8px 未満の動きは間引く
     if (dx * dx + dy * dy < min * min) return;
-    pr = p[p.length - 1] * 0.5 + pr * 0.5; // 筆圧のゆらぎをならす
+    pr = p[p.length - 1] * 0.65 + pr * 0.35; // 筆圧のゆらぎをならす（太さのでこぼこ防止）
   }
-  p.push(r1(pt.x), r1(pt.y), r2(pr));
+  p.push(r1(x), r1(y), r2(pr));
 }
 
 function eraseAt(pt) {
@@ -908,6 +935,7 @@ function endAct() {
   act = null;
   const e = a.entry;
   if (a.tool === 'pen' || a.tool === 'hl') {
+    if (a.filter && a.tip) { act = a; addPoint(a.tip, true); act = null; } // 最後はペン先の位置で終える
     if (a.stroke.p.length) {
       e.page.strokes.push(a.stroke);
       drawOnTiles(e, a.stroke);
@@ -1213,6 +1241,15 @@ function editorMenu() {
       paperRow.append(h('button', { class: cur.paper === k ? 'on' : '', text: v, onclick: () => { setPaper(k, false); close(); } }));
     }
     const sw = h('span', { class: `switch${settings.finger ? ' on' : ''}` });
+    const smoothRow = h('div', { class: 'row' });
+    const drawSmooth = () => {
+      smoothRow.innerHTML = '';
+      SMOOTH_NAMES.forEach((name, i) => smoothRow.append(h('button', {
+        class: settings.smooth === i ? 'on' : '', text: name,
+        onclick: () => { settings.smooth = i; saveSettings(); drawSmooth(); },
+      })));
+    };
+    drawSmooth();
     el.append(
       h('div', { class: 'label', text: `用紙（${ed.cur + 1}ページ目）` }), paperRow,
       h('button', { class: 'item', text: 'すべてのページをこの用紙にする', onclick: () => { setPaper(cur.paper, true); close(); toast('すべてのページに適用しました'); } }),
@@ -1226,6 +1263,7 @@ function editorMenu() {
           toast(settings.finger ? '指でも書けます（2本指でスクロール）' : 'ペンだけで書けます（指でスクロール）', 2500);
         },
       }, h('span', { text: '指で書く' }), sw),
+      h('div', { class: 'label', text: '手ぶれ補正（線のなめらかさ）' }), smoothRow,
       h('button', { class: 'item', text: 'ズームをリセット', onclick: () => { close(); ed.zoom = 1; layout(); updateTiles(); } }),
       h('button', { class: 'item', text: 'PDFで書き出す', onclick: () => { close(); exportPdf(ed.nb); } }),
       h('button', { class: 'item', text: 'このページを画像で保存', onclick: () => { close(); exportPng(); } }),
