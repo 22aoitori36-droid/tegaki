@@ -3,7 +3,7 @@ import { makePdf } from './pdf.js';
 
 // ページ座標系：幅 1000 × 高さ 1414（A4 比）。描画データはすべてこの単位で保存する
 const PW = 1000, PH = 1414;
-const MAX_CANVAS_W = 2400; // iPad のキャンバスメモリ上限対策
+const TILE = 1024; // ページを分割して描くタイルの大きさ（実ピクセル）。見えている所だけ作る
 
 const $ = (s) => document.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -104,95 +104,135 @@ async function shareOrDownload(blob, name) {
 const safeName = (s) => (s || 'ノート').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
 
 // ---------------------------------------------------------------- 描画
-function drawPaper(ctx, type, s) {
+// すべてページ単位（1000×1414）の座標で描く。ctx には「s 倍＋平行移動」の変換をかけておく
+function drawPaper(ctx, type, s, r) { // r = 描く範囲（ページ単位）
   ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, PW * s, PH * s);
-  const step = 40;
-  ctx.lineWidth = Math.max(1, 1.1 * s);
+  ctx.fillRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+  const step = 40, lw = Math.max(1, 1.1 * s) / s, pad = 3;
+  const inY = (y) => y >= r.y0 - pad && y <= r.y1 + pad;
+  const inX = (x) => x >= r.x0 - pad && x <= r.x1 + pad;
+  ctx.lineWidth = lw;
   if (type === 'ruled') {
     ctx.strokeStyle = '#c6d4e8';
     ctx.beginPath();
-    for (let y = 120; y < PH - 30; y += step) { ctx.moveTo(0, y * s); ctx.lineTo(PW * s, y * s); }
+    for (let y = 120; y < PH - 30; y += step) if (inY(y)) { ctx.moveTo(r.x0, y); ctx.lineTo(r.x1, y); }
     ctx.stroke();
-    ctx.strokeStyle = '#f2c4c4';
-    ctx.beginPath(); ctx.moveTo(90 * s, 0); ctx.lineTo(90 * s, PH * s); ctx.stroke();
+    if (inX(90)) { ctx.strokeStyle = '#f2c4c4'; ctx.beginPath(); ctx.moveTo(90, r.y0); ctx.lineTo(90, r.y1); ctx.stroke(); }
   } else if (type === 'grid') {
     ctx.strokeStyle = '#dde5ef';
     ctx.beginPath();
-    for (let y = step; y < PH; y += step) { ctx.moveTo(0, y * s); ctx.lineTo(PW * s, y * s); }
-    for (let x = step; x < PW; x += step) { ctx.moveTo(x * s, 0); ctx.lineTo(x * s, PH * s); }
+    for (let y = step; y < PH; y += step) if (inY(y)) { ctx.moveTo(r.x0, y); ctx.lineTo(r.x1, y); }
+    for (let x = step; x < PW; x += step) if (inX(x)) { ctx.moveTo(x, r.y0); ctx.lineTo(x, r.y1); }
     ctx.stroke();
   } else if (type === 'dots') {
     ctx.fillStyle = '#b9c3d0';
-    const r = Math.max(1, 1.7 * s);
+    const rad = Math.max(1, 1.7 * s) / s;
+    ctx.beginPath();
     for (let y = step; y < PH; y += step) {
-      for (let x = step; x < PW; x += step) { ctx.beginPath(); ctx.arc(x * s, y * s, r, 0, 7); ctx.fill(); }
+      if (!inY(y)) continue;
+      for (let x = step; x < PW; x += step) if (inX(x)) { ctx.moveTo(x + rad, y); ctx.arc(x, y, rad, 0, Math.PI * 2); }
     }
+    ctx.fill();
   }
 }
 
 const pf = (pr) => 0.35 + 1.0 * pr; // 筆圧 → 太さ倍率
 
-// ペンの1区間。点 P0..Pn-1 の中点を結ぶ二次曲線でなめらかにする
-function drawSeg(ctx, st, i, s, final) {
-  const p = st.p;
-  const n = p.length / 3;
-  const X = (k) => p[k * 3] * s, Y = (k) => p[k * 3 + 1] * s, P = (k) => p[k * 3 + 2];
-  const MX = (k) => (X(k - 1) + X(k)) / 2, MY = (k) => (Y(k - 1) + Y(k)) / 2;
-  ctx.beginPath();
-  let pr;
-  if (final) {
-    ctx.moveTo(MX(i), MY(i)); ctx.lineTo(X(i), Y(i)); pr = P(i);
-  } else if (i === 0) {
-    ctx.moveTo(X(0), Y(0)); ctx.lineTo(MX(1), MY(1)); pr = (P(0) + P(1)) / 2;
-  } else {
-    ctx.moveTo(MX(i), MY(i)); ctx.quadraticCurveTo(X(i), Y(i), MX(i + 1), MY(i + 1)); pr = P(i);
-  }
-  if (n === 0) return;
-  ctx.lineWidth = Math.max(0.6, st.w * pf(pr) * s);
-  ctx.stroke();
+// 入力点を「中点を結ぶ二次曲線」でなめらかにし、細かく刻んだ [x, y, 半径, ...] にする
+function densePoints(st, step, minR) {
+  const p = st.p, n = p.length / 3, out = [];
+  const R = (pr) => Math.max(minR, (st.w * pf(pr)) / 2);
+  const X = (k) => p[3 * k], Y = (k) => p[3 * k + 1], P = (k) => p[3 * k + 2];
+  if (n === 1) return [X(0), Y(0), R(P(0))];
+  const mx = (k) => (X(k - 1) + X(k)) / 2, my = (k) => (Y(k - 1) + Y(k)) / 2, mp = (k) => (P(k - 1) + P(k)) / 2;
+  const line = (x0, y0, p0, x1, y1, p1, first) => {
+    const k = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / step));
+    for (let j = first ? 0 : 1; j <= k; j++) { const t = j / k; out.push(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, R(p0 + (p1 - p0) * t)); }
+  };
+  const quad = (x0, y0, cx, cy, x1, y1, p0, p1) => {
+    const k = Math.max(1, Math.ceil((Math.hypot(cx - x0, cy - y0) + Math.hypot(x1 - cx, y1 - cy)) / step));
+    for (let j = 1; j <= k; j++) {
+      const t = j / k, u = 1 - t;
+      out.push(u * u * x0 + 2 * u * t * cx + t * t * x1, u * u * y0 + 2 * u * t * cy + t * t * y1, R(p0 + (p1 - p0) * t));
+    }
+  };
+  line(X(0), Y(0), P(0), mx(1), my(1), mp(1), true);
+  for (let i = 1; i <= n - 2; i++) quad(mx(i), my(i), X(i), Y(i), mx(i + 1), my(i + 1), mp(i), mp(i + 1));
+  line(mx(n - 1), my(n - 1), mp(n - 1), X(n - 1), Y(n - 1), P(n - 1), false);
+  return out;
 }
 
-function hlPath(ctx, st, s) {
-  const p = st.p, n = p.length / 3;
-  ctx.beginPath();
-  ctx.moveTo(p[0] * s, p[1] * s);
-  if (n === 1) ctx.lineTo(p[0] * s + 0.01, p[1] * s);
-  for (let i = 1; i < n - 1; i++) {
-    const mx = (p[i * 3] + p[i * 3 + 3]) / 2, my = (p[i * 3 + 1] + p[i * 3 + 4]) / 2;
-    ctx.quadraticCurveTo(p[i * 3] * s, p[i * 3 + 1] * s, mx * s, my * s);
+// ペンの形：各点の円＋隣どうしの円をつなぐ台形を1つの図形として塗る。
+// 区切りの継ぎ目が出ないので、筆圧で太さが変わってもなめらか
+function penPath(st, step) {
+  const d = densePoints(st, step, step * 0.15), path = new Path2D();
+  for (let i = 0; i < d.length; i += 3) {
+    const x = d[i], y = d[i + 1], r = d[i + 2];
+    path.moveTo(x + r, y); path.arc(x, y, r, 0, Math.PI * 2);
+    if (i === 0) continue;
+    const x1 = d[i - 3], y1 = d[i - 2], r1 = d[i - 1];
+    const dx = x - x1, dy = y - y1, dist = Math.hypot(dx, dy);
+    if (dist <= Math.abs(r1 - r) + 1e-6) continue;
+    const ux = dx / dist, uy = dy / dist, c = (r1 - r) / dist, sn = Math.sqrt(1 - c * c);
+    const ax = ux * c - uy * sn, ay = uy * c + ux * sn; // 片側の接点方向
+    const bx = ux * c + uy * sn, by = uy * c - ux * sn; // 反対側
+    // 円（arc）と同じ回り方向にそろえる（nonzero で塗ると和集合になる）
+    path.moveTo(x1 + r1 * ax, y1 + r1 * ay);
+    path.lineTo(x1 + r1 * bx, y1 + r1 * by);
+    path.lineTo(x + r * bx, y + r * by);
+    path.lineTo(x + r * ax, y + r * ay);
+    path.closePath();
   }
-  if (n > 1) ctx.lineTo(p[(n - 1) * 3] * s, p[(n - 1) * 3 + 1] * s);
+  return path;
+}
+
+function hlPath(st) {
+  const p = st.p, n = p.length / 3, path = new Path2D();
+  path.moveTo(p[0], p[1]);
+  if (n === 1) path.lineTo(p[0] + 0.01, p[1]);
+  for (let i = 1; i < n - 1; i++) path.quadraticCurveTo(p[i * 3], p[i * 3 + 1], (p[i * 3] + p[i * 3 + 3]) / 2, (p[i * 3 + 1] + p[i * 3 + 4]) / 2);
+  if (n > 1) path.lineTo(p[(n - 1) * 3], p[(n - 1) * 3 + 1]);
+  return path;
+}
+
+// 刻み幅は画面上でおよそ 2px（拡大するほど細かく）。線ごとにキャッシュする
+const stepFor = (s) => 2 ** Math.round(Math.log2(Math.max(0.2, 2 / s)));
+const pathCache = new WeakMap();
+function strokePath(st, s, live) {
+  if (st.t === 'hl') return hlPath(st);
+  const step = stepFor(s);
+  if (live) return penPath(st, step);
+  let c = pathCache.get(st);
+  if (!c || c.step !== step) { c = { step, path: penPath(st, step) }; pathCache.set(st, c); }
+  return c.path;
 }
 
 function drawStroke(ctx, st, s, live = false) {
-  const n = st.p.length / 3;
-  if (!n) return;
+  if (!st.p.length) return;
+  const path = strokePath(st, s, live);
   ctx.save();
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.strokeStyle = ctx.fillStyle = st.c;
   if (st.t === 'hl') {
     if (!live) { ctx.globalAlpha = 0.4; ctx.globalCompositeOperation = 'multiply'; }
-    ctx.lineWidth = st.w * s;
-    hlPath(ctx, st, s);
-    ctx.stroke();
-  } else if (n === 1) {
-    ctx.beginPath();
-    ctx.arc(st.p[0] * s, st.p[1] * s, Math.max(0.6, st.w * pf(st.p[2]) * s) / 2, 0, 7);
-    ctx.fill();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.lineWidth = st.w; ctx.strokeStyle = st.c;
+    ctx.stroke(path);
   } else {
-    for (let i = 0; i < n - 1; i++) drawSeg(ctx, st, i, s, false);
-    drawSeg(ctx, st, n - 1, s, true);
+    ctx.fillStyle = st.c;
+    ctx.fill(path);
   }
   ctx.restore();
 }
 
-function renderPageTo(ctx, page, s) {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+const hits = (b, r) => !(b.x1 < r.x0 || b.x0 > r.x1 || b.y1 < r.y0 || b.y0 > r.y1);
+
+// ページの一部（ページ単位の矩形 r）を、r の左上が原点になるように s 倍で描く
+function renderRegion(ctx, page, s, r) {
+  ctx.setTransform(s, 0, 0, s, -r.x0 * s, -r.y0 * s);
   ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
-  drawPaper(ctx, page.paper, s);
-  for (const st of page.strokes) drawStroke(ctx, st, s);
+  drawPaper(ctx, page.paper, s, r);
+  for (const st of page.strokes) if (hits(bbox(st), r)) drawStroke(ctx, st, s);
 }
+function renderPageTo(ctx, page, s) { renderRegion(ctx, page, s, { x0: 0, y0: 0, x1: PW, y1: PH }); }
 
 // ---------------------------------------------------------------- 幾何
 const bboxCache = new WeakMap();
@@ -238,6 +278,7 @@ function translate(strokes, dx, dy) {
   for (const st of strokes) {
     for (let i = 0; i < st.p.length; i += 3) { st.p[i] = r1(st.p[i] + dx); st.p[i + 1] = r1(st.p[i + 1] + dy); }
     bboxCache.delete(st);
+    pathCache.delete(st);
   }
 }
 
@@ -499,19 +540,22 @@ async function importBackup(file) {
 
 // ================================================================ エディタ
 const ed = {
-  nb: null, pages: [], map: new Map(), // pageId → { page, div, canvas, ctx, scale }
-  zoom: 1, baseW: 800, pageW: 800, cur: 0,
+  nb: null, pages: [], map: new Map(), // pageId → { page, div, tiles: Map, wd, hd }
+  zoom: 1, baseW: 800, pageW: 800, wd: 800, hd: 1131, cur: 0,
   undo: [], redo: [], dirty: new Set(), saveT: 0,
-  live: null, io: null, renderQ: new Set(),
+  renderQ: new Map(),
 };
 let act = null;   // 描画中の操作
 let sel = null;   // なげなわ選択 { entry, strokes, box, div }
 let pinch = null; // 2本指ジェスチャ
 let fingers = 0;  // 画面に触れている指の数（ペンを除く）
+let lastPen = 0;  // 最後にペンが動いた時刻（手のひら対策）
+let unlockT = 0;
 
 const scroller = $('#scroller');
 const pagesEl = $('#pages');
 const dpr = () => Math.min(window.devicePixelRatio || 1, 3);
+const penRecent = (ms = 600) => Date.now() - lastPen < ms;
 
 async function openNotebook(id) {
   const nb = await db.notebook(id);
@@ -528,8 +572,8 @@ async function openNotebook(id) {
   $('#editor').hidden = false;
   $('#nbTitle').textContent = nb.title;
   renderToolbar();
-  rebuildPages();
   scroller.scrollTop = 0; scroller.scrollLeft = 0;
+  rebuildPages();
   updateUndoButtons();
 }
 
@@ -538,8 +582,7 @@ async function closeEditor() {
   cancelAct();
   clearSel();
   await flush();
-  if (ed.io) ed.io.disconnect();
-  for (const e of ed.map.values()) releaseCanvas(e);
+  for (const e of ed.map.values()) freeTiles(e.tiles);
   ed.map.clear();
   pagesEl.innerHTML = '';
   ed.nb = null; ed.pages = [];
@@ -547,71 +590,98 @@ async function closeEditor() {
 
 function rebuildPages() {
   clearSel();
-  if (ed.io) ed.io.disconnect();
-  for (const e of ed.map.values()) releaseCanvas(e);
+  for (const e of ed.map.values()) freeTiles(e.tiles);
   ed.map.clear();
   pagesEl.innerHTML = '';
-  ed.io = new IntersectionObserver((items) => {
-    for (const it of items) {
-      const e = ed.map.get(it.target.dataset.id);
-      if (!e) continue;
-      if (it.isIntersecting) ensureCanvas(e);
-      else if (!(act && act.entry === e)) releaseCanvas(e);
-    }
-  }, { root: scroller, rootMargin: '120% 60%' });
   ed.pages.forEach((page, i) => {
     const div = h('div', { class: 'page', 'data-id': page.id }, h('span', { class: 'pno', text: `${i + 1}` }));
     pagesEl.append(div);
-    ed.map.set(page.id, { page, div, canvas: null, ctx: null, scale: 1 });
-    ed.io.observe(div);
+    ed.map.set(page.id, { page, div, tiles: new Map(), wd: 0, hd: 0 });
   });
   layout();
+  updateTiles();
   updatePageNo();
 }
 
+// ページの大きさは「実ピクセルで整数」になるように決める（タイルの継ぎ目を出さないため）
 function layout() {
   const avail = Math.max(200, scroller.clientWidth - 32);
+  const k = dpr();
   ed.baseW = Math.min(avail, 1100);
-  ed.pageW = Math.round(ed.baseW * ed.zoom);
-  const ph = Math.round(ed.pageW * PH / PW);
-  for (const e of ed.map.values()) { e.div.style.width = `${ed.pageW}px`; e.div.style.height = `${ph}px`; }
+  ed.wd = Math.round(ed.baseW * ed.zoom * k);
+  ed.hd = Math.round(ed.wd * PH / PW);
+  ed.pageW = ed.wd / k;
+  for (const e of ed.map.values()) { e.div.style.width = `${ed.wd / k}px`; e.div.style.height = `${ed.hd / k}px`; }
   if (sel) placeSelMenu();
 }
 
-function ensureCanvas(e, force = false) {
-  const w = Math.min(MAX_CANVAS_W, Math.round(ed.pageW * dpr()));
-  const hgt = Math.round(w * PH / PW);
-  if (!e.canvas) {
-    e.canvas = h('canvas');
-    e.div.prepend(e.canvas);
-    e.ctx = e.canvas.getContext('2d');
-    force = true;
-  }
-  if (force || e.canvas.width !== w) {
-    e.canvas.width = w; e.canvas.height = hgt;
-    e.scale = w / PW;
-    renderPageTo(e.ctx, e.page, e.scale);
+// ---------------------------------------------------------------- タイル（見えている所だけ実解像度で描く）
+function freeTiles(tiles) {
+  for (const t of tiles.values()) { t.c.width = t.c.height = 0; t.c.remove(); } // iOS ではこれでメモリが解放される
+  tiles.clear();
+}
+const tileRect = (e, t) => { const s = e.wd / PW; return { x0: t.x0 / s, y0: t.y0 / s, x1: (t.x0 + t.w) / s, y1: (t.y0 + t.h) / s }; };
+function renderTile(e, t) { renderRegion(t.ctx, e.page, e.wd / PW, tileRect(e, t)); }
+function makeTile(e, i, j) {
+  const x0 = i * TILE, y0 = j * TILE, w = Math.min(TILE, e.wd - x0), hh = Math.min(TILE, e.hd - y0);
+  const c = h('canvas', { class: 'tile' });
+  c.width = w; c.height = hh;
+  // % 指定なので、ピンチ中はそのまま伸び縮みする
+  c.style.cssText = `left:${(x0 / e.wd) * 100}%;top:${(y0 / e.hd) * 100}%;width:${(w / e.wd) * 100}%;height:${(hh / e.hd) * 100}%`;
+  const t = { c, ctx: c.getContext('2d'), x0, y0, w, h: hh };
+  renderTile(e, t);
+  e.div.prepend(c);
+  return t;
+}
+function updateTiles() {
+  if (!ed.nb || pinch) return;
+  const sr = scroller.getBoundingClientRect();
+  const mx = sr.width * 0.25, my = sr.height * 0.6;
+  for (const e of ed.map.values()) {
+    let old = null;
+    if (e.wd !== ed.wd || e.hd !== ed.hd) { old = e.tiles; e.tiles = new Map(); e.wd = ed.wd; e.hd = ed.hd; }
+    const dr = e.div.getBoundingClientRect();
+    const vx0 = Math.max(sr.left - mx, dr.left), vx1 = Math.min(sr.right + mx, dr.right);
+    const vy0 = Math.max(sr.top - my, dr.top), vy1 = Math.min(sr.bottom + my, dr.bottom);
+    const need = new Set();
+    if (vx1 > vx0 && vy1 > vy0 && dr.width > 0) {
+      const k = e.wd / dr.width;
+      const ni = Math.ceil(e.wd / TILE), nj = Math.ceil(e.hd / TILE);
+      const i0 = Math.max(0, Math.floor(((vx0 - dr.left) * k) / TILE)), i1 = Math.min(ni - 1, Math.floor(((vx1 - dr.left) * k) / TILE));
+      const j0 = Math.max(0, Math.floor(((vy0 - dr.top) * k) / TILE)), j1 = Math.min(nj - 1, Math.floor(((vy1 - dr.top) * k) / TILE));
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const key = `${i},${j}`;
+          need.add(key);
+          if (!e.tiles.has(key)) e.tiles.set(key, makeTile(e, i, j));
+        }
+      }
+    }
+    for (const [key, t] of e.tiles) if (!need.has(key)) { t.c.width = t.c.height = 0; t.c.remove(); e.tiles.delete(key); }
+    if (old) freeTiles(old); // 新しい解像度を描き終えてから古いタイルを外す（ちらつき防止）
   }
 }
-function releaseCanvas(e) {
-  if (!e.canvas) return;
-  e.canvas.width = e.canvas.height = 0; // iOS ではこれでメモリが解放される
-  e.canvas.remove();
-  e.canvas = e.ctx = null;
-}
-function scheduleRender(e) {
+// 変更のあった範囲（ページ単位。null なら全体）のタイルを次のフレームで描き直す
+function scheduleRender(e, box = null) {
   if (!ed.renderQ.size) {
     requestAnimationFrame(() => {
-      for (const x of ed.renderQ) if (x.ctx) renderPageTo(x.ctx, x.page, x.scale);
+      for (const [x, b] of ed.renderQ) for (const t of x.tiles.values()) if (!b || hits(b, tileRect(x, t))) renderTile(x, t);
       ed.renderQ.clear();
     });
   }
-  ed.renderQ.add(e);
+  if (ed.renderQ.has(e)) {
+    const b = ed.renderQ.get(e);
+    ed.renderQ.set(e, b && box ? { x0: Math.min(b.x0, box.x0), y0: Math.min(b.y0, box.y0), x1: Math.max(b.x1, box.x1), y1: Math.max(b.y1, box.y1) } : null);
+  } else ed.renderQ.set(e, box);
 }
-let reresT;
-function reresolve() { // ズーム・回転後に解像度を合わせ直す
-  clearTimeout(reresT);
-  reresT = setTimeout(() => { for (const e of ed.map.values()) if (e.canvas) ensureCanvas(e); }, 120);
+// 書き終えた線を、重なるタイルにだけ上描きする
+function drawOnTiles(e, st) {
+  const b = bbox(st), s = e.wd / PW;
+  for (const t of e.tiles.values()) {
+    if (!hits(b, tileRect(e, t))) continue;
+    t.ctx.setTransform(s, 0, 0, s, -t.x0, -t.y0);
+    drawStroke(t.ctx, st, s);
+  }
 }
 
 function updatePageNo() {
@@ -627,9 +697,9 @@ function updatePageNo() {
 let scrollRaf = 0;
 scroller.addEventListener('scroll', () => {
   if (scrollRaf) return;
-  scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; updatePageNo(); if (sel) placeSelMenu(); });
+  scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; updatePageNo(); updateTiles(); if (sel) placeSelMenu(); });
 });
-window.addEventListener('resize', () => { if (ed.nb) { layout(); reresolve(); } });
+window.addEventListener('resize', () => { if (ed.nb) { layout(); updateTiles(); } });
 
 // ---------------------------------------------------------------- ツールバー
 function renderToolbar() {
@@ -670,6 +740,56 @@ $('#tools').addEventListener('click', (e) => {
   renderToolbar();
 });
 
+// ---------------------------------------------------------------- 書いている途中の線（画面全体の実解像度レイヤー）
+const live = { c: h('canvas', { id: 'live', hidden: '' }), ox: 0, oy: 0, raf: 0 };
+live.ctx = live.c.getContext('2d');
+document.body.append(live.c);
+function liveStart(cls) {
+  const sr = scroller.getBoundingClientRect(), k = dpr();
+  const w = Math.round(sr.width * k), hh = Math.round(sr.height * k);
+  if (live.c.width !== w || live.c.height !== hh) { live.c.width = w; live.c.height = hh; }
+  live.c.style.cssText = `left:${sr.left}px;top:${sr.top}px;width:${sr.width}px;height:${sr.height}px`;
+  live.c.className = cls;
+  live.ox = sr.left; live.oy = sr.top;
+  live.c.hidden = false;
+}
+function liveClear() {
+  cancelAnimationFrame(live.raf); live.raf = 0;
+  live.ctx.setTransform(1, 0, 0, 1, 0, 0);
+  live.ctx.clearRect(0, 0, live.c.width, live.c.height);
+  live.c.hidden = true;
+}
+function requestLive() {
+  if (!live.raf) live.raf = requestAnimationFrame(() => { live.raf = 0; if (act) drawLive(); });
+}
+// いまのページ位置（act.rect）から毎回変換を作り直すので、途中でページが動いてもずれない
+function drawLive() {
+  const ctx = live.ctx, k = dpr(), r = act.rect, s = (r.width * k) / PW;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, live.c.width, live.c.height);
+  ctx.setTransform(s, 0, 0, s, (r.left - live.ox) * k, (r.top - live.oy) * k);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, PW, PH); ctx.clip();
+  if (act.stroke) {
+    drawStroke(ctx, act.stroke, s, true);
+  } else if (act.tool === 'eraser' && act.last) {
+    ctx.beginPath(); ctx.arc(act.last.x, act.last.y, act.r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,.06)'; ctx.fill();
+    ctx.lineWidth = (1.5 * k) / s; ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.stroke();
+  } else if (act.mode === 'lasso') {
+    ctx.beginPath();
+    act.poly.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(10,122,255,.06)'; ctx.fill();
+    ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5; ctx.strokeStyle = '#0a7aff'; ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ペンで書いている間とその直後は、手のひらでスクロール・ズームしないように固定する
+function lockScroll() { clearTimeout(unlockT); scroller.classList.add('lock'); }
+function unlockSoon() { clearTimeout(unlockT); unlockT = setTimeout(() => scroller.classList.remove('lock'), 500); }
+
 // ---------------------------------------------------------------- 入力（ペン・指）
 function point(e) {
   const r = act.rect;
@@ -678,24 +798,11 @@ function point(e) {
   return { x: ((e.clientX - r.left) / r.width) * PW, y: ((e.clientY - r.top) / r.height) * PH, p: pr };
 }
 
-function liveCanvas(e, cls) {
-  if (!ed.live) { ed.live = h('canvas'); ed.liveCtx = ed.live.getContext('2d'); }
-  const c = ed.live;
-  c.className = `live ${cls}`;
-  if (c.width !== e.canvas.width || c.height !== e.canvas.height) { c.width = e.canvas.width; c.height = e.canvas.height; }
-  else ed.liveCtx.clearRect(0, 0, c.width, c.height);
-  e.div.append(c);
-  return ed.liveCtx;
-}
-function clearLive() {
-  if (!ed.live) return;
-  ed.liveCtx.clearRect(0, 0, ed.live.width, ed.live.height);
-  ed.live.remove();
-}
-
 pagesEl.addEventListener('pointerdown', (e) => {
-  if (!ed.nb) return;
-  if (e.pointerType === 'touch' && (!settings.finger || pinch || fingers > 1)) return;
+  if (!ed.nb || pinch) return;
+  if (e.pointerType === 'pen') lastPen = Date.now();
+  // 指は「指で書く」がオンのときだけ。ペンを使った直後の指（手のひら）は無視
+  if (e.pointerType === 'touch' && (!settings.finger || fingers > 1 || penRecent(1500))) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (act) {
     if (e.pointerType === 'pen' && act.ptype === 'touch') cancelAct(); // ペンが来たら手のひらの線は捨てる
@@ -705,21 +812,21 @@ pagesEl.addEventListener('pointerdown', (e) => {
   if (!div) { clearSel(); return; }
   const entry = ed.map.get(div.dataset.id);
   e.preventDefault();
-  ensureCanvas(entry);
   act = { id: e.pointerId, ptype: e.pointerType, entry, rect: div.getBoundingClientRect(), tool: settings.tool };
+  if (e.pointerType === 'pen' || e.pointerType === 'touch') lockScroll();
   const pt = point(e);
   const t = act.tool;
   if (t === 'pen' || t === 'hl') {
     if (sel) clearSel();
     act.stroke = { t, c: settings[t].color, w: SIZES[t][settings[t].size], p: [] };
-    act.ctx = liveCanvas(entry, t === 'hl' ? 'hl' : '');
+    liveStart(t === 'hl' ? 'hl' : '');
     addPoint(pt);
   } else if (t === 'eraser') {
     if (sel) clearSel();
     act.r = SIZES.eraser[settings.eraser.size];
     act.removed = [];
     act.last = pt;
-    act.ctx = liveCanvas(entry, '');
+    liveStart('');
     eraseAt(pt);
   } else if (t === 'lasso') {
     if (sel && sel.entry === entry && pt.x >= sel.box.x0 && pt.x <= sel.box.x1 && pt.y >= sel.box.y0 && pt.y <= sel.box.y1) {
@@ -728,15 +835,19 @@ pagesEl.addEventListener('pointerdown', (e) => {
     } else {
       clearSel();
       act.mode = 'lasso'; act.poly = [pt];
-      act.ctx = liveCanvas(entry, '');
+      liveStart('');
     }
   }
+  requestLive();
 });
 
 window.addEventListener('pointermove', (e) => {
   if (!act || e.pointerId !== act.id) return;
+  if (e.pointerType === 'pen') lastPen = Date.now();
+  act.rect = act.entry.div.getBoundingClientRect(); // ページが動いていても正しい位置に書く
   const list = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
   for (const ev of list.length ? list : [e]) moveAct(point(ev));
+  requestLive();
 });
 window.addEventListener('pointerup', (e) => { if (act && e.pointerId === act.id) endAct(); });
 window.addEventListener('pointercancel', (e) => {
@@ -745,23 +856,15 @@ window.addEventListener('pointercancel', (e) => {
 });
 
 function addPoint(pt) {
-  const st = act.stroke, p = st.p;
+  const p = act.stroke.p;
+  let pr = pt.p;
   if (p.length) {
     const dx = pt.x - p[p.length - 3], dy = pt.y - p[p.length - 2];
-    if (dx * dx + dy * dy < 0.36) { p[p.length - 1] = Math.max(p[p.length - 1], r2(pt.p)); return; }
+    const min = 0.8 / ((act.rect.width * dpr()) / PW); // 画面上で約 0.8px 未満の動きは間引く
+    if (dx * dx + dy * dy < min * min) return;
+    pr = p[p.length - 1] * 0.5 + pr * 0.5; // 筆圧のゆらぎをならす
   }
-  p.push(r1(pt.x), r1(pt.y), r2(pt.p));
-  const n = p.length / 3, s = act.entry.scale, ctx = act.ctx;
-  if (st.t === 'hl') {
-    ctx.clearRect(0, 0, ed.live.width, ed.live.height);
-    drawStroke(ctx, st, s, true);
-  } else if (n === 1) {
-    drawStroke(ctx, st, s);
-  } else {
-    ctx.save(); ctx.lineCap = 'round'; ctx.strokeStyle = st.c;
-    drawSeg(ctx, st, n - 2, s, false);
-    ctx.restore();
-  }
+  p.push(r1(pt.x), r1(pt.y), r2(pr));
 }
 
 function eraseAt(pt) {
@@ -769,25 +872,21 @@ function eraseAt(pt) {
   const from = act.last;
   const dist = Math.hypot(pt.x - from.x, pt.y - from.y);
   const steps = Math.max(1, Math.ceil(dist / (r / 2)));
-  let changed = false;
+  let box = null;
   for (let k = 1; k <= steps; k++) {
     const x = from.x + ((pt.x - from.x) * k) / steps, y = from.y + ((pt.y - from.y) * k) / steps;
     for (let i = page.strokes.length - 1; i >= 0; i--) {
-      if (hitStroke(page.strokes[i], x, y, r)) {
-        act.removed.push({ stroke: page.strokes[i], index: i });
+      const st = page.strokes[i];
+      if (hitStroke(st, x, y, r)) {
+        act.removed.push({ stroke: st, index: i });
         page.strokes.splice(i, 1);
-        changed = true;
+        const b = bbox(st);
+        box = box ? { x0: Math.min(box.x0, b.x0), y0: Math.min(box.y0, b.y0), x1: Math.max(box.x1, b.x1), y1: Math.max(box.y1, b.y1) } : { ...b };
       }
     }
   }
   act.last = pt;
-  if (changed) scheduleRender(act.entry);
-  // 消しゴムの円を表示
-  const ctx = act.ctx, s = act.entry.scale;
-  ctx.clearRect(0, 0, ed.live.width, ed.live.height);
-  ctx.beginPath(); ctx.arc(pt.x * s, pt.y * s, r * s, 0, 7);
-  ctx.fillStyle = 'rgba(0,0,0,.06)'; ctx.fill();
-  ctx.lineWidth = Math.max(1, s); ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.stroke();
+  if (box) scheduleRender(act.entry, box);
 }
 
 function moveAct(pt) {
@@ -796,44 +895,37 @@ function moveAct(pt) {
   else if (t === 'eraser') eraseAt(pt);
   else if (act.mode === 'lasso') {
     const last = act.poly[act.poly.length - 1];
-    if (Math.hypot(pt.x - last.x, pt.y - last.y) < 2) return;
-    act.poly.push(pt);
-    const ctx = act.ctx, s = act.entry.scale;
-    ctx.clearRect(0, 0, ed.live.width, ed.live.height);
-    ctx.beginPath();
-    act.poly.forEach((q, i) => (i ? ctx.lineTo(q.x * s, q.y * s) : ctx.moveTo(q.x * s, q.y * s)));
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(10,122,255,.06)'; ctx.fill();
-    ctx.setLineDash([6 * s, 5 * s]); ctx.lineWidth = Math.max(1, 1.5 * s); ctx.strokeStyle = '#0a7aff'; ctx.stroke();
-    ctx.setLineDash([]);
+    if (Math.hypot(pt.x - last.x, pt.y - last.y) >= 2) act.poly.push(pt);
   } else if (act.mode === 'move') {
     const dx = pt.x - act.last.x, dy = pt.y - act.last.y;
+    const b0 = { ...sel.box };
     act.last = pt;
     act.dx += dx; act.dy += dy;
     translate(sel.strokes, dx, dy);
     sel.box.x0 += dx; sel.box.x1 += dx; sel.box.y0 += dy; sel.box.y1 += dy;
     placeSelBox();
-    scheduleRender(act.entry);
+    scheduleRender(act.entry, { x0: Math.min(b0.x0, sel.box.x0), y0: Math.min(b0.y0, sel.box.y0), x1: Math.max(b0.x1, sel.box.x1), y1: Math.max(b0.y1, sel.box.y1) });
   }
 }
 
 function endAct() {
   const a = act;
   act = null;
+  if (a.ptype === 'pen' || a.ptype === 'touch') unlockSoon();
   const e = a.entry;
   if (a.tool === 'pen' || a.tool === 'hl') {
-    clearLive();
     if (a.stroke.p.length) {
       e.page.strokes.push(a.stroke);
-      if (e.ctx) drawStroke(e.ctx, a.stroke, e.scale);
+      drawOnTiles(e, a.stroke);
       pushUndo({ type: 'add', pageId: e.page.id, strokes: [a.stroke] });
       markDirty(e);
     }
+    liveClear();
   } else if (a.tool === 'eraser') {
-    clearLive();
+    liveClear();
     if (a.removed.length) { pushUndo({ type: 'erase', pageId: e.page.id, items: a.removed }); markDirty(e); }
   } else if (a.mode === 'lasso') {
-    clearLive();
+    liveClear();
     const poly = a.poly;
     if (poly.length < 3) return;
     const picked = e.page.strokes.filter((st) => {
@@ -856,7 +948,8 @@ function cancelAct() {
   if (!act) return;
   const a = act;
   act = null;
-  clearLive();
+  unlockSoon();
+  liveClear();
   if (a.tool === 'eraser' && a.removed.length) { // 消した線を戻す
     for (let i = a.removed.length - 1; i >= 0; i--) a.entry.page.strokes.splice(a.removed[i].index, 0, a.removed[i].stroke);
     scheduleRender(a.entry);
@@ -874,7 +967,9 @@ scroller.addEventListener('touchstart', (e) => {
   if ([...e.changedTouches].some((t) => t.touchType === 'stylus')) e.preventDefault(); // ペンでスクロールさせない
   const f = fingerList(e.touches);
   fingers = f.length;
-  if (f.length >= 2 && !(act && act.ptype === 'pen')) {
+  // ペンで書いている最中・直後に触れた指は手のひらとみなし、スクロールもズームもさせない
+  if (f.length && ((act && act.ptype === 'pen') || penRecent())) { e.preventDefault(); return; }
+  if (f.length >= 2) {
     e.preventDefault();
     if (act && act.ptype === 'touch') cancelAct();
     startPinch(f);
@@ -882,7 +977,7 @@ scroller.addEventListener('touchstart', (e) => {
 }, { passive: false });
 scroller.addEventListener('touchmove', (e) => {
   const f = fingerList(e.touches);
-  if (act && (act.ptype === 'pen' || act.ptype === 'touch')) { e.preventDefault(); return; } // 書いている間は手のひらでスクロールしない
+  if (act || (!pinch && penRecent())) { e.preventDefault(); return; } // 書いている間は手のひらでスクロールしない
   if (pinch && f.length >= 2) { e.preventDefault(); movePinch(f); }
 }, { passive: false });
 const touchEnd = (e) => {
@@ -917,7 +1012,7 @@ function endPinch() {
   pinch = null;
   if (Date.now() - p.t0 < 280 && p.moved < 12) { undo(); return; } // 2本指タップ＝取り消し
   if (Math.abs(ed.zoom - 1) < 0.06) { ed.zoom = 1; layout(); }
-  reresolve();
+  updateTiles(); // 新しい倍率の解像度で描き直す
 }
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 
@@ -1138,7 +1233,7 @@ function editorMenu() {
           toast(settings.finger ? '指でも書けます（2本指でスクロール）' : 'ペンだけで書けます（指でスクロール）', 2500);
         },
       }, h('span', { text: '指で書く' }), sw),
-      h('button', { class: 'item', text: 'ズームをリセット', onclick: () => { close(); ed.zoom = 1; layout(); reresolve(); } }),
+      h('button', { class: 'item', text: 'ズームをリセット', onclick: () => { close(); ed.zoom = 1; layout(); updateTiles(); } }),
       h('button', { class: 'item', text: 'PDFで書き出す', onclick: () => { close(); exportPdf(ed.nb); } }),
       h('button', { class: 'item', text: 'このページを画像で保存', onclick: () => { close(); exportPng(); } }),
     );
@@ -1231,4 +1326,15 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.ser
 renderShelf();
 
 // テスト用
-window.__tegaki = { ed, db, openNotebook, showLibrary, settings };
+window.__tegaki = {
+  ed, db, openNotebook, showLibrary, settings, layout, updateTiles,
+  // 指定したページ座標の画素（タイルから読む）
+  pixel(pageIndex, x, y) {
+    const e = ed.map.get(ed.pages[pageIndex].id), s = e.wd / PW;
+    const px = Math.floor(x * s), py = Math.floor(y * s);
+    for (const t of e.tiles.values()) {
+      if (px >= t.x0 && px < t.x0 + t.w && py >= t.y0 && py < t.y0 + t.h) return [...t.ctx.getImageData(px - t.x0, py - t.y0, 1, 1).data];
+    }
+    return null;
+  },
+};
