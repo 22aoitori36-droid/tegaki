@@ -819,8 +819,9 @@ function point(e) {
 }
 
 pagesEl.addEventListener('pointerdown', (e) => {
-  if (!ed.nb || pinch) return;
-  if (e.pointerType === 'pen') { lastPen = Date.now(); pan = null; stopGlide(); } // ペンが来たら指スクロールは止める
+  if (!ed.nb) return;
+  if (e.pointerType === 'pen') { lastPen = Date.now(); pan = null; stopGlide(); cancelPinch(); } // ペンが来たら指の操作は止める
+  if (pinch) return;
   // 指は「指で書く」がオンのときだけ。ペンを使った直後の指（手のひら）は無視
   if (e.pointerType === 'touch' && (!settings.finger || fingers > 1 || penRecent(1500))) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -1057,18 +1058,24 @@ function pinchGeom(f) {
   const [a, b] = f;
   return { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1, x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
 }
+const PINCH_DEAD = 28; // 2本の指の間隔がこれ以上変わるまでは拡大しない（手のひらで勝手に拡大しないように）
 function startPinch(f) {
   const g = pinchGeom(f);
   const r = scroller.getBoundingClientRect();
   pinch = {
-    d0: g.d, z0: ed.zoom, t0: Date.now(), moved: 0, x0: g.x, y0: g.y,
+    d0: g.d, z0: ed.zoom, t0: Date.now(), moved: 0, x0: g.x, y0: g.y, zooming: false,
+    sl: scroller.scrollLeft, st: scroller.scrollTop, // 取り消し用の元の位置
     cx: (scroller.scrollLeft + g.x - r.left) / ed.zoom, cy: (scroller.scrollTop + g.y - r.top) / ed.zoom, r,
   };
 }
 function movePinch(f) {
   const g = pinchGeom(f);
   pinch.moved = Math.max(pinch.moved, Math.hypot(g.x - pinch.x0, g.y - pinch.y0), Math.abs(g.d - pinch.d0));
-  const z = settings.zoomLock ? pinch.z0 : Math.min(4, Math.max(0.5, pinch.z0 * (g.d / pinch.d0)));
+  if (!pinch.zooming && !settings.zoomLock && Math.abs(g.d - pinch.d0) > PINCH_DEAD) {
+    pinch.zooming = true;
+    pinch.d0 = g.d; // ここから拡大を始める（いきなり飛ばない）
+  }
+  const z = pinch.zooming ? Math.min(4, Math.max(0.5, pinch.z0 * (g.d / pinch.d0))) : pinch.z0;
   if (Math.abs(z - ed.zoom) > 0.002) { ed.zoom = z; layout(); }
   scroller.scrollLeft = pinch.cx * ed.zoom - (g.x - pinch.r.left);
   scroller.scrollTop = pinch.cy * ed.zoom - (g.y - pinch.r.top);
@@ -1079,6 +1086,16 @@ function endPinch() {
   if (Date.now() - p.t0 < 280 && p.moved < 12) { undo(); return; } // 2本指タップ＝取り消し
   if (Math.abs(ed.zoom - 1) < 0.06) { ed.zoom = 1; layout(); }
   updateTiles(); // 新しい倍率の解像度で描き直す
+}
+// 2本指（実は手のひら）の途中でペンが来たら、ズーム・スクロールを元に戻してペンを優先する
+function cancelPinch() {
+  const p = pinch;
+  if (!p) return;
+  pinch = null;
+  if (ed.zoom !== p.z0) { ed.zoom = p.z0; layout(); }
+  scroller.scrollLeft = p.sl;
+  scroller.scrollTop = p.st;
+  updateTiles();
 }
 // Safari 自体の拡大（ピンチ・ダブルタップ）を止める。ペンや消しゴムを素早く押し替えたときに画面が拡大されないように
 document.addEventListener('gesturestart', (e) => e.preventDefault());
