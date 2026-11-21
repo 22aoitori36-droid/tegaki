@@ -819,7 +819,7 @@ function point(e) {
 
 pagesEl.addEventListener('pointerdown', (e) => {
   if (!ed.nb || pinch) return;
-  if (e.pointerType === 'pen') lastPen = Date.now();
+  if (e.pointerType === 'pen') { lastPen = Date.now(); pan = null; stopGlide(); } // ペンが来たら指スクロールは止める
   // 指は「指で書く」がオンのときだけ。ペンを使った直後の指（手のひら）は無視
   if (e.pointerType === 'touch' && (!settings.finger || fingers > 1 || penRecent(1500))) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -982,28 +982,72 @@ function cancelAct() {
   }
 }
 
-// ---------------------------------------------------------------- 2本指：ズーム・スクロール・タップで取り消し
+// ---------------------------------------------------------------- 指の操作（スクロール・ズーム）はすべて自前で処理する
+// iPad Safari 標準のタッチスクロールが有効だと、ペンを置くたびに「スクロールかどうか」の判定が入り、
+// 書き始めの線が遅れたり途切れたりする（二重書きの原因）。そこで #scroller は touch-action:none にして、
+// 1本指スクロール（慣性つき）と2本指のズーム・スクロールをここで行う。
 const fingerList = (tl) => [...tl].filter((t) => t.touchType !== 'stylus');
+let pan = null;  // 1本指スクロール中の指
+let glide = 0;   // 慣性スクロールの requestAnimationFrame
+function stopGlide() { cancelAnimationFrame(glide); glide = 0; }
+function startGlide(vx, vy) { // 速度は px/ms
+  let last = performance.now();
+  const step = (now) => {
+    const dt = Math.min(50, now - last);
+    last = now;
+    const k = Math.pow(0.95, dt / 16);
+    vx *= k; vy *= k;
+    const l = scroller.scrollLeft, t = scroller.scrollTop;
+    scroller.scrollLeft = l - vx * dt;
+    scroller.scrollTop = t - vy * dt;
+    const stuck = scroller.scrollLeft === l && scroller.scrollTop === t;
+    if (Math.hypot(vx, vy) < 0.02 || stuck) { glide = 0; return; }
+    glide = requestAnimationFrame(step);
+  };
+  glide = requestAnimationFrame(step);
+}
 scroller.addEventListener('touchstart', (e) => {
-  if ([...e.changedTouches].some((t) => t.touchType === 'stylus')) e.preventDefault(); // ペンでスクロールさせない
+  e.preventDefault(); // ブラウザ標準のスクロール・ズーム・長押しメニューは使わない
   const f = fingerList(e.touches);
   fingers = f.length;
+  stopGlide();
+  if (!f.length) return; // ペンだけ
   // ペンで書いている最中・直後に触れた指は手のひらとみなし、スクロールもズームもさせない
-  if (f.length && ((act && act.ptype === 'pen') || penRecent())) { e.preventDefault(); return; }
+  if ((act && act.ptype === 'pen') || penRecent()) { pan = null; return; }
   if (f.length >= 2) {
-    e.preventDefault();
+    pan = null;
     if (act && act.ptype === 'touch') cancelAct();
-    startPinch(f);
+    if (!pinch) startPinch(f);
+  } else if (!settings.finger) {
+    const t = f[0];
+    pan = { id: t.identifier, x: t.clientX, y: t.clientY, t: e.timeStamp, vx: 0, vy: 0 };
   }
 }, { passive: false });
 scroller.addEventListener('touchmove', (e) => {
+  e.preventDefault();
   const f = fingerList(e.touches);
-  if (act || (!pinch && penRecent())) { e.preventDefault(); return; } // 書いている間は手のひらでスクロールしない
-  if (pinch && f.length >= 2) { e.preventDefault(); movePinch(f); }
+  if (pinch) { if (f.length >= 2) movePinch(f); return; }
+  if (!pan || act) return;
+  if (penRecent()) { pan = null; return; }
+  const t = f.find((x) => x.identifier === pan.id);
+  if (!t) return;
+  const dx = t.clientX - pan.x, dy = t.clientY - pan.y, dt = Math.max(1, e.timeStamp - pan.t);
+  scroller.scrollLeft -= dx;
+  scroller.scrollTop -= dy;
+  pan.vx = pan.vx * 0.6 + (dx / dt) * 0.4;
+  pan.vy = pan.vy * 0.6 + (dy / dt) * 0.4;
+  pan.x = t.clientX; pan.y = t.clientY; pan.t = e.timeStamp;
 }, { passive: false });
 const touchEnd = (e) => {
-  fingers = fingerList(e.touches).length;
+  const f = fingerList(e.touches);
+  fingers = f.length;
   if (pinch && fingers < 2) endPinch();
+  if (pan && !f.some((x) => x.identifier === pan.id)) {
+    const p = pan;
+    pan = null;
+    // 指を払って離したら慣性で流す（止めてから離したときは流さない）
+    if (e.timeStamp - p.t < 80 && Math.hypot(p.vx, p.vy) > 0.1) startGlide(p.vx, p.vy);
+  }
 };
 scroller.addEventListener('touchend', touchEnd);
 scroller.addEventListener('touchcancel', touchEnd);

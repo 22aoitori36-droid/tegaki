@@ -60,10 +60,10 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 
 /* ---- ページ ---- */
 #scroller {
-  flex: 1; overflow: auto; position: relative; -webkit-overflow-scrolling: touch;
-  touch-action: pan-x pan-y; overscroll-behavior: contain;
+  flex: 1; overflow: auto; position: relative;
+  /* 標準のタッチスクロールは使わない（ペンの書き始めが遅れ・途切れる原因）。指のスクロールは JS で行う */
+  touch-action: none; overscroll-behavior: contain;
 }
-#scroller.finger { touch-action: none; }
 #scroller { scrollbar-gutter: stable; }
 /* 書いている途中に overflow を切り替えないこと（iPad Safari でスクロール層が作り直され、最初の1画がずれる）。
    手のひらのスクロール止めは JS の touchstart/touchmove で行う */
